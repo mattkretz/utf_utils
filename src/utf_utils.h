@@ -113,6 +113,9 @@ class UtfUtils
     static  ptrdiff_t   FastConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char16_t* pDst) noexcept;
     static  ptrdiff_t   SseConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char16_t* pDst) noexcept;
 
+    template <typename T>
+    static  ptrdiff_t   SimdConvert(char8_t const* pSrc, char8_t const* pSrcEnd, T* pDst) noexcept;
+
     //- Conversion to UTF-32/UTF-16 using pre-computed first code unit lookup table.
     //
     static  ptrdiff_t   BasicBigTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char32_t* pDst) noexcept;
@@ -123,6 +126,9 @@ class UtfUtils
     static  ptrdiff_t   FastBigTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char16_t* pDst) noexcept;
     static  ptrdiff_t   SseBigTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char16_t* pDst) noexcept;
 
+    template <typename T>
+    static  ptrdiff_t   SimdBigTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, T* pDst) noexcept;
+
     //- Conversion to UTF-32/UTF-16 using small lookup table and masking operations on first code unit.
     //
     static  ptrdiff_t   BasicSmallTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char32_t* pDst) noexcept;
@@ -132,6 +138,9 @@ class UtfUtils
     static  ptrdiff_t   BasicSmallTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char16_t* pDst) noexcept;
     static  ptrdiff_t   FastSmallTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char16_t* pDst) noexcept;
     static  ptrdiff_t   SseSmallTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char16_t* pDst) noexcept;
+
+    template <typename T>
+    static  ptrdiff_t   SimdSmallTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, T* pDst) noexcept;
 
     //- Conversion that traces path through DFA, writing to stdout.
     //
@@ -199,12 +208,23 @@ class UtfUtils
     static  char const*         smStateNames[9];
 
   private:
+    enum class NextChar : bool {
+        NotAscii,
+        MayBeAscii
+    };
     static  int32_t AdvanceWithBigTable(char8_t const*& pSrc, char8_t const* pSrcEnd, char32_t& cdpt) noexcept;
     static  int32_t AdvanceWithSmallTable(char8_t const*& pSrc, char8_t const* pSrcEnd, char32_t& cdpt) noexcept;
     static  State   AdvanceWithTrace(char8_t const*& pSrc, char8_t const* pSrcEnd, char32_t& cdpt) noexcept;
 
+    template <typename T, typename AdvanceWithTableFun>
+    static std::ptrdiff_t SimdConvert(char8_t const* pSrc, char8_t const* const pSrcEnd,
+                                      T* pDst,
+                                      AdvanceWithTableFun&& advanceWithTable) noexcept;
+
     static  void    ConvertAsciiWithSse(char8_t const*& pSrc, char32_t*& pDst) noexcept;
     static  void    ConvertAsciiWithSse(char8_t const*& pSrc, char16_t*& pDst) noexcept;
+    template <class T>
+    static  NextChar ConvertAsciiWithSimd(char8_t const*& pSrc, T*& pDst) noexcept;
     static  int32_t GetTrailingZeros(int32_t x) noexcept;
 
     static  void    PrintStateData(State curr, CharClass type, uint32_t unit, State next);
@@ -371,6 +391,28 @@ KEWB_FORCE_INLINE ptrdiff_t
 UtfUtils::SseConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char32_t* pDst) noexcept
 {
     return SseBigTableConvert(pSrc, pSrcEnd, pDst);
+}
+
+//--------------------------------------------------------------------------------------------------
+/// \brief  Converts a sequence of UTF-8 code units to a sequence of UTF-32 code points.
+///
+/// \param pSrc
+///     A non-null pointer defining the beginning of the code unit input range.
+/// \param pSrcEnd
+///     A non-null past-the-end pointer defining the end of the code unit input range.
+/// \param pDst
+///     A non-null pointer defining the beginning of the code point output range.
+///
+/// \returns
+///     If successful, the number of UTF-32 code points written; otherwise -1 is returned to
+///     indicate an error was encountered.
+//--------------------------------------------------------------------------------------------------
+//
+template <typename T>
+KEWB_FORCE_INLINE ptrdiff_t
+UtfUtils::SimdConvert(char8_t const* pSrc, char8_t const* pSrcEnd, T* pDst) noexcept
+{
+    return SimdBigTableConvert(pSrc, pSrcEnd, pDst);
 }
 
 //--------------------------------------------------------------------------------------------------

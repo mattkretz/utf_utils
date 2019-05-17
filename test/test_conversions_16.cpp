@@ -210,6 +210,24 @@ Convert16_KewbSseSmTab(string const& src, size_t reps, u16string& dst)
     return dstLen;
 }
 
+//--------------
+//
+ptrdiff_t
+Convert16_KewbSimdSmTab(string const& src, size_t reps, u16string& dst)
+{
+    char8_t const*  pSrcBuf = (char8_t const*) &src[0]; //- Pointer to source buffer
+    char8_t const*  pSrcEnd = pSrcBuf + src.size();     //- Pointer to end of source buffer
+    char16_t*       pDstBuf = &dst[0];                  //- Pointer to destination buffer
+    ptrdiff_t       dstLen  = 0;
+
+    for (uint64_t i = 0;  i < reps;  ++i)
+    {
+        dstLen = UtfUtils::SimdSmallTableConvert(pSrcBuf, pSrcEnd, pDstBuf);
+    }
+
+    return dstLen;
+}
+
 //--------------------------------------------------------------------------------------------------
 //
 ptrdiff_t
@@ -264,6 +282,24 @@ Convert16_KewbSseBgTab(string const& src, size_t reps, u16string& dst)
     return dstLen;
 }
 
+//--------------
+//
+ptrdiff_t
+Convert16_KewbSimdBgTab(string const& src, size_t reps, u16string& dst)
+{
+    char8_t const*  pSrcBuf = (char8_t const*) &src[0]; //- Pointer to source buffer
+    char8_t const*  pSrcEnd = pSrcBuf + src.size();     //- Pointer to end of source buffer
+    char16_t*       pDstBuf = &dst[0];                  //- Pointer to destination buffer
+    ptrdiff_t       dstLen  = 0;
+
+    for (uint64_t i = 0;  i < reps;  ++i)
+    {
+        dstLen = UtfUtils::SimdBigTableConvert(pSrcBuf, pSrcEnd, pDstBuf);
+    }
+
+    return dstLen;
+}
+
 //--------------------------------------------------------------------------------------------------
 //
 ptrdiff_t
@@ -313,6 +349,24 @@ Convert16_KewbSse(string const& src, size_t reps, u16string& dst)
     for (uint64_t i = 0;  i < reps;  ++i)
     {
         dstLen = UtfUtils::SseConvert(pSrcBuf, pSrcEnd, pDstBuf);
+    }
+
+    return dstLen;
+}
+
+//--------------
+//
+ptrdiff_t
+Convert16_KewbSimd(string const& src, size_t reps, u16string& dst)
+{
+    char8_t const*  pSrcBuf = (char8_t const*) &src[0]; //- Pointer to source buffer
+    char8_t const*  pSrcEnd = pSrcBuf + src.size();     //- Pointer to end of source buffer
+    char16_t*       pDstBuf = &dst[0];                  //- Pointer to destination buffer
+    ptrdiff_t       dstLen  = 0;
+
+    for (uint64_t i = 0;  i < reps;  ++i)
+    {
+        dstLen = UtfUtils::SimdConvert(pSrcBuf, pSrcEnd, pDstBuf);
     }
 
     return dstLen;
@@ -443,6 +497,14 @@ TestAllConversions16(string const& fname, bool isFile, size_t repShift, bool tbl
         tdiff = TestOneConversion16(&Convert16_KewbSseBgTab, u8src, reps, u16answer, "kewb-sse-big-table");
         times.push_back(tdiff);
         algos.emplace_back("kewb-sse-big-table");
+
+        tdiff = TestOneConversion16(&Convert16_KewbSimdSmTab, u8src, reps, u16answer, "kewb-vir-simd-small-table");
+        times.push_back(tdiff);
+        algos.emplace_back("kewb-vir-simd-small-table");
+
+        tdiff = TestOneConversion16(&Convert16_KewbSimdBgTab, u8src, reps, u16answer, "kewb-vir-simd-big-table");
+        times.push_back(tdiff);
+        algos.emplace_back("kewb-vir-simd-big-table");
     }
     else
     {
@@ -457,6 +519,10 @@ TestAllConversions16(string const& fname, bool isFile, size_t repShift, bool tbl
         tdiff = TestOneConversion16(&Convert16_KewbSse, u8src, reps, u16answer, "kewb-sse");
         times.push_back(tdiff);
         algos.emplace_back("kewb-sse");
+
+        tdiff = TestOneConversion16(&Convert16_KewbSimd, u8src, reps, u16answer, "kewb-vir-simd");
+        times.push_back(tdiff);
+        algos.emplace_back("kewb-vir-simd");
     }
 
     return tuple<name_list, time_list>(algos, times);

@@ -6,6 +6,8 @@
 //
 #include "utf_utils.h"
 #include <cstdio>
+#include <experimental/simd>
+namespace stdx = std::experimental;
 
 #if defined KEWB_PLATFORM_LINUX
     #include <emmintrin.h>
@@ -544,6 +546,101 @@ UtfUtils::SseBigTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char32
     return pDst - pDstOrig;
 }
 
+using char8v = stdx::native_simd<UtfUtils::char8_t>;
+
+template <typename T, typename AdvanceWithTableFun>
+std::ptrdiff_t
+UtfUtils::SimdConvert(char8_t const* pSrc, char8_t const* const pSrcEnd, T* pDst, AdvanceWithTableFun&& advanceWithTable) noexcept
+{
+    T*        pDstOrig = pDst;
+    char32_t  cdpt;
+
+    while (pSrcEnd - pSrc >= ptrdiff_t(char8v::size()))
+    {
+        const NextChar next = ConvertAsciiWithSimd(pSrc, pDst);
+        if (next == NextChar::NotAscii)
+        {
+            do {
+                if (advanceWithTable(pSrc, pSrcEnd, cdpt) != ERR)
+                {
+                    if constexpr(std::is_same_v<T, char16_t>)
+                    {
+                        GetCodeUnits(cdpt, pDst);
+                    }
+                    else
+                    {
+                        *pDst++ = cdpt;
+                    }
+                }
+                else
+                {
+                    return -1;
+                }
+            } while (pSrc < pSrcEnd && pSrc[0] > 0x7f);
+        }
+    }
+
+    while (pSrc < pSrcEnd)
+    {
+        if (pSrc[0] < 0x80)
+        {
+            *pDst++ = *pSrc++;
+        }
+        else if (advanceWithTable(pSrc, pSrcEnd, cdpt) != ERR)
+        {
+            if constexpr(std::is_same_v<T, char16_t>)
+            {
+                GetCodeUnits(cdpt, pDst);
+            }
+            else
+            {
+                *pDst++ = cdpt;
+            }
+        }
+        else
+        {
+            return -1;
+        }
+    }
+
+    return pDst - pDstOrig;
+}
+
+//--------------------------------------------------------------------------------------------------
+/// \brief  Converts a sequence of UTF-8 code units to a sequence of UTF-16/32 code points.
+///
+/// \details
+///     This static member function reads an input sequence of UTF-8 code units and converts
+///     it to an output sequence of UTF-16/32 code points.  It uses the DFA to perform non-ascii
+///     code-unit sequence conversions, but optimizes by converting contiguous sequences of
+///     ASCII code units using std::simd.  It uses the `AdvanceWithBigTable` member
+///     function to read and convert input.
+///
+/// \param pSrc
+///     A non-null pointer defining the beginning of the code unit input range.
+/// \param pSrcEnd
+///     A non-null past-the-end pointer defining the end of the code unit input range.
+/// \param pDst
+///     A non-null pointer defining the beginning of the code point output range.
+///
+/// \returns
+///     If successful, the number of UTF-16/32 code points written; otherwise -1 is returned to
+///     indicate an error was encountered.
+//--------------------------------------------------------------------------------------------------
+//
+template <typename T>
+KEWB_ALIGN_FN std::ptrdiff_t
+UtfUtils::SimdBigTableConvert(char8_t const* pSrc, char8_t const* const pSrcEnd, T* pDst) noexcept
+{
+    return SimdConvert(pSrc, pSrcEnd, pDst, AdvanceWithBigTable);
+}
+template std::ptrdiff_t UtfUtils::SimdBigTableConvert(char8_t const*,
+                                                      char8_t const* const,
+                                                      char16_t*) noexcept;
+template std::ptrdiff_t UtfUtils::SimdBigTableConvert(char8_t const*,
+                                                      char8_t const* const,
+                                                      char32_t*) noexcept;
+
 //--------------------------------------------------------------------------------------------------
 /// \brief  Converts a sequence of UTF-8 code units to a sequence of UTF-16 code units.
 ///
@@ -865,6 +962,41 @@ UtfUtils::SseSmallTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char
 
     return pDst - pDstOrig;
 }
+
+//--------------------------------------------------------------------------------------------------
+/// \brief  Converts a sequence of UTF-8 code units to a sequence of UTF-16/32 code points.
+///
+/// \details
+///     This static member function reads an input sequence of UTF-8 code units and converts
+///     it to an output sequence of UTF-16/32 code points.  It uses the DFA to perform non-ascii
+///     code-unit sequence conversions, but optimizes by converting contiguous sequences of
+///     ASCII code units using std::simd.  It uses the `AdvanceWithSmallTable` member
+///     function to read and convert input.
+///
+/// \param pSrc
+///     A non-null pointer defining the beginning of the code unit input range.
+/// \param pSrcEnd
+///     A non-null past-the-end pointer defining the end of the code unit input range.
+/// \param pDst
+///     A non-null pointer defining the beginning of the code point output range.
+///
+/// \returns
+///     If successful, the number of UTF-16/32 code points written; otherwise -1 is returned to
+///     indicate an error was encountered.
+//--------------------------------------------------------------------------------------------------
+//
+template <typename T>
+KEWB_ALIGN_FN std::ptrdiff_t
+UtfUtils::SimdSmallTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, T* pDst) noexcept
+{
+    return SimdConvert(pSrc, pSrcEnd, pDst, AdvanceWithSmallTable);
+}
+template std::ptrdiff_t UtfUtils::SimdSmallTableConvert(char8_t const*,
+                                                        char8_t const* const,
+                                                        char16_t*) noexcept;
+template std::ptrdiff_t UtfUtils::SimdSmallTableConvert(char8_t const*,
+                                                        char8_t const* const,
+                                                        char32_t*) noexcept;
 
 //--------------------------------------------------------------------------------------------------
 /// \brief  Converts a sequence of UTF-8 code units to a sequence of UTF-16 code units.
@@ -1246,6 +1378,44 @@ UtfUtils::ConvertAsciiWithSse(char8_t const*& pSrc, char16_t*& pDst) noexcept
     }
 
 #endif
+
+//--------------------------------------------------------------------------------------------------
+/// \brief  Converts a sequence of ASCII UTF-8 code units to a sequence of UTF-32 code points.
+///
+/// \details
+///     This static member function uses SSE intrinsics to convert a register of ASCII code
+///     units to four registers of equivalent UTF-32 code units.
+///
+/// \param pSrc
+///     A reference to a non-null pointer defining the start of the code unit input range.
+/// \param pDst
+///     A reference to a non-null pointer defining the start of the code point output range.
+//--------------------------------------------------------------------------------------------------
+//
+template <class T>
+KEWB_FORCE_INLINE UtfUtils::NextChar
+UtfUtils::ConvertAsciiWithSimd(char8_t const*& pSrc, T*& pDst) noexcept
+{
+  if (char8v::size() > 1 && pSrc[1] > 0x7f) {
+    // quick exit if vectorization is overkill
+    if (pSrc[0] < 0x80) {
+      *pDst++ = *pSrc++;
+    }
+    return NextChar::NotAscii;
+  }
+  const char8v chunk(pSrc, stdx::element_aligned);
+  chunk.copy_to(pDst, stdx::element_aligned);
+  if (none_of(chunk > 0x7f)) {
+    pSrc += chunk.size();
+    pDst += chunk.size();
+    return NextChar::MayBeAscii;
+  } else {
+    const int n_valid = find_first_set(chunk > 0x7f);
+    pSrc += n_valid;
+    pDst += n_valid;
+    return NextChar::NotAscii;
+  }
+}
 
 //--------------------------------------------------------------------------------------------------
 /// \brief  Prints state information for tracing versions of converters.
