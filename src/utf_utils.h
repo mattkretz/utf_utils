@@ -118,7 +118,6 @@ class UtfUtils
     static  ptrdiff_t   BasicBigTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char32_t* pDst) noexcept;
     static  ptrdiff_t   FastBigTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char32_t* pDst) noexcept;
     static  ptrdiff_t   SseBigTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char32_t* pDst) noexcept;
-    static  ptrdiff_t   SseBigTableConvertX(char8_t const* pSrc, char8_t const* pSrcEnd, char32_t* pDst) noexcept;
 
     static  ptrdiff_t   BasicBigTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char16_t* pDst) noexcept;
     static  ptrdiff_t   FastBigTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char16_t* pDst) noexcept;
@@ -205,7 +204,6 @@ class UtfUtils
     static  State   AdvanceWithTrace(char8_t const*& pSrc, char8_t const* pSrcEnd, char32_t& cdpt) noexcept;
 
     static  void    ConvertAsciiWithSse(char8_t const*& pSrc, char32_t*& pDst) noexcept;
-    static  int32_t ConvertAsciiWithSseX(char8_t const*& pSrc, char32_t*& pDst) noexcept;
     static  void    ConvertAsciiWithSse(char8_t const*& pSrc, char16_t*& pDst) noexcept;
     static  int32_t GetTrailingZeros(int32_t x) noexcept;
 
