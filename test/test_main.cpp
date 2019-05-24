@@ -90,8 +90,8 @@ MakeFileList(file_list& files)
     files.emplace_back("hindi_wiki_in_english.txt");
     files.emplace_back("hindi_wiki_in_russian.txt");
     files.emplace_back("kermit.txt");
-    files.emplace_back("z1_kosme.txt");
-    files.emplace_back("z1_ascii.txt");
+    //files.emplace_back("z1_kosme.txt");
+    //files.emplace_back("z1_ascii.txt");
 }
 
 void
