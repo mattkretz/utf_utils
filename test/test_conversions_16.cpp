@@ -549,21 +549,30 @@ TestFiles16(string const& dataDir, size_t repShift, file_list const& files, bool
         all_times.emplace_back(std::move(times));
     }
 
+    std::ofstream datafile("utf-16.dat", std::ios::out);
+    datafile << "file";
+
     printf("\ntabular summary:\nfile\\algo");
     for (auto const& algo : algos)
     {
+        datafile << '\t' << algo;
         printf(", %s", algo.c_str());
     }
+    datafile << '\n';
     printf("\n");
 
     for (size_t i = 0;  i < files.size();  ++i)
     {
+        datafile << '"' << files[i] << '"';
         printf("%s", files[i].c_str());
 
         for (size_t j = 0;  j < all_times[i].size();  ++j)
         {
-            printf(", %u", (uint32_t) all_times[i][j]);
+            uint32_t time = all_times[i][j];
+            datafile << '\t' << time;
+            printf(", %u", time);
         }
+        datafile << '\n';
         printf("\n");
     }
     printf("\n");

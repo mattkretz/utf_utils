@@ -13,3 +13,6 @@ tmp
 *.tmp
 *.vcxproj.user
 ~*
+*.pdf
+*.svg
+*.dat
