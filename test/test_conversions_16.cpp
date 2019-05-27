@@ -356,17 +356,18 @@ Convert16_KewbSse(string const& src, size_t reps, u16string& dst)
 
 //--------------
 //
-ptrdiff_t
-Convert16_KewbSimd(string const& src, size_t reps, u16string& dst)
+ptrdiff_t Convert16_KewbApi(string const& src, size_t reps, u16string& dst,
+                            ptrdiff_t (&converter)(char8_t const*, char8_t const* const,
+                                                   char16_t*))
 {
-    char8_t const*  pSrcBuf = (char8_t const*) &src[0]; //- Pointer to source buffer
+    char8_t const*  pSrcBuf = reinterpret_cast<char8_t const*>(src.data()); //- Pointer to source buffer
     char8_t const*  pSrcEnd = pSrcBuf + src.size();     //- Pointer to end of source buffer
     char16_t*       pDstBuf = &dst[0];                  //- Pointer to destination buffer
     ptrdiff_t       dstLen  = 0;
 
-    for (uint64_t i = 0;  i < reps;  ++i)
+    for (size_t i = 0; i < reps; ++i)
     {
-        dstLen = UtfUtils::SimdConvert(pSrcBuf, pSrcEnd, pDstBuf);
+        dstLen = converter(pSrcBuf, pSrcEnd, pDstBuf);
     }
 
     return dstLen;
@@ -520,9 +521,13 @@ TestAllConversions16(string const& fname, bool isFile, size_t repShift, bool tbl
         times.push_back(tdiff);
         algos.emplace_back("kewb-sse");
 
-        tdiff = TestOneConversion16(&Convert16_KewbSimd, u8src, reps, u16answer, "kewb-vir-simd");
-        times.push_back(tdiff);
-        algos.emplace_back("kewb-vir-simd");
+        auto&& add = [&](char const* name, TestFn16 fn) {
+          times.push_back(TestOneConversion16(fn, u8src, reps, u16answer, name));
+          algos.emplace_back(name);
+        };
+        add("kewb-vir-simd", [](auto a, auto b, auto c) {
+          return Convert16_KewbApi(a, b, c, UtfUtils::SimdBigTableConvert<false>);
+        });
     }
 
     return tuple<name_list, time_list>(algos, times);
