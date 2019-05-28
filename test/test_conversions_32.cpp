@@ -522,7 +522,16 @@ TestAllConversions32(string const& fname, bool isFile, size_t repShift, bool tbl
           algos.emplace_back(name);
         };
         add("kewb-vir-simd", [](auto a, auto b, auto c) {
-          return Convert32_KewbApi(a, b, c, UtfUtils::SimdBigTableConvert<false>);
+          return Convert32_KewbApi(a, b, c, UtfUtils::SimdConvert<UtfUtils::LikeKewb, UtfUtils::BigTable>);
+        });
+        add("kewb-vir-simd-smart", [](auto a, auto b, auto c) {
+          return Convert32_KewbApi(a, b, c, UtfUtils::SimdConvert<UtfUtils::UseNonAsciiKnowledge, UtfUtils::BigTable>);
+        });
+        add("kewb-vir-simd-all", [](auto a, auto b, auto c) {
+          return Convert32_KewbApi(a, b, c, UtfUtils::SimdConvert<UtfUtils::LikeKewbButVecAll, UtfUtils::BigTable>);
+        });
+        add("kewb-vir-simd-all-smart", [](auto a, auto b, auto c) {
+          return Convert32_KewbApi(a, b, c, UtfUtils::SimdConvert<UtfUtils::UseNonAsciiKnowledgeVecAll, UtfUtils::BigTable>);
         });
     }
 

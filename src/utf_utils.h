@@ -113,8 +113,19 @@ class UtfUtils
     static  ptrdiff_t   FastConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char16_t* pDst) noexcept;
     static  ptrdiff_t   SseConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char16_t* pDst) noexcept;
 
-    template <typename T>
-    static  ptrdiff_t   SimdConvert(char8_t const* pSrc, char8_t const* pSrcEnd, T* pDst) noexcept;
+    enum SimdImplVariant {
+        LikeKewb = 0,
+        UseNonAsciiKnowledge = 1,
+        VecAll = 2,
+        LikeKewbButVecAll = 2,
+        UseNonAsciiKnowledgeVecAll = 3
+    };
+
+    enum TableFun { BigTable, SmallTable };
+
+    template <SimdImplVariant, TableFun, typename T>
+    static ptrdiff_t SimdConvert(char8_t const* pSrc, char8_t const* const pSrcEnd,
+                                 T* pDst) noexcept;
 
     //- Conversion to UTF-32/UTF-16 using pre-computed first code unit lookup table.
     //
@@ -215,11 +226,6 @@ class UtfUtils
     static  int32_t AdvanceWithBigTable(char8_t const*& pSrc, char8_t const* pSrcEnd, char32_t& cdpt) noexcept;
     static  int32_t AdvanceWithSmallTable(char8_t const*& pSrc, char8_t const* pSrcEnd, char32_t& cdpt) noexcept;
     static  State   AdvanceWithTrace(char8_t const*& pSrc, char8_t const* pSrcEnd, char32_t& cdpt) noexcept;
-
-    template <typename T, typename AdvanceWithTableFun>
-    static std::ptrdiff_t SimdConvert(char8_t const* pSrc, char8_t const* const pSrcEnd,
-                                      T* pDst,
-                                      AdvanceWithTableFun&& advanceWithTable) noexcept;
 
     static  void    ConvertAsciiWithSse(char8_t const*& pSrc, char32_t*& pDst) noexcept;
     static  void    ConvertAsciiWithSse(char8_t const*& pSrc, char16_t*& pDst) noexcept;
@@ -391,28 +397,6 @@ KEWB_FORCE_INLINE ptrdiff_t
 UtfUtils::SseConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char32_t* pDst) noexcept
 {
     return SseBigTableConvert(pSrc, pSrcEnd, pDst);
-}
-
-//--------------------------------------------------------------------------------------------------
-/// \brief  Converts a sequence of UTF-8 code units to a sequence of UTF-32 code points.
-///
-/// \param pSrc
-///     A non-null pointer defining the beginning of the code unit input range.
-/// \param pSrcEnd
-///     A non-null past-the-end pointer defining the end of the code unit input range.
-/// \param pDst
-///     A non-null pointer defining the beginning of the code point output range.
-///
-/// \returns
-///     If successful, the number of UTF-32 code points written; otherwise -1 is returned to
-///     indicate an error was encountered.
-//--------------------------------------------------------------------------------------------------
-//
-template <typename T>
-KEWB_FORCE_INLINE ptrdiff_t
-UtfUtils::SimdConvert(char8_t const* pSrc, char8_t const* pSrcEnd, T* pDst) noexcept
-{
-    return SimdBigTableConvert(pSrc, pSrcEnd, pDst);
 }
 
 //--------------------------------------------------------------------------------------------------

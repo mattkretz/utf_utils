@@ -548,35 +548,62 @@ UtfUtils::SseBigTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char32
 
 using char8v = stdx::native_simd<UtfUtils::char8_t>;
 
-template <typename T, typename AdvanceWithTableFun>
-std::ptrdiff_t
-UtfUtils::SimdConvert(char8_t const* pSrc, char8_t const* const pSrcEnd, T* pDst, AdvanceWithTableFun&& advanceWithTable) noexcept
+template <class T>
+KEWB_FORCE_INLINE bool ConvertNonAsciiWithSimd(UtfUtils::char8_t const*& pSrc,
+                                               T*& pDst) noexcept;
+
+template <UtfUtils::SimdImplVariant ImplVariant, UtfUtils::TableFun TableFun, typename T>
+std::ptrdiff_t UtfUtils::SimdConvert(char8_t const* pSrc, char8_t const* const pSrcEnd,
+                                     T* pDst) noexcept
 {
     T*        pDstOrig = pDst;
     char32_t  cdpt;
 
-    while (pSrcEnd - pSrc >= ptrdiff_t(char8v::size()))
+    auto&& advanceWithTable =
+        TableFun == BigTable ? AdvanceWithBigTable : AdvanceWithSmallTable;
+
+    while (pSrcEnd - char8v::size() > pSrc)
     {
-        const NextChar next = ConvertAsciiWithSimd(pSrc, pDst);
-        if (next == NextChar::NotAscii)
-        {
+        if constexpr (ImplVariant & UseNonAsciiKnowledge) {
+          const NextChar next =
+              pSrc[0] < 0x80 ? ConvertAsciiWithSimd(pSrc, pDst) : NextChar::NotAscii;
+          if (next == NextChar::NotAscii) {
             do {
-                if (advanceWithTable(pSrc, pSrcEnd, cdpt) != ERR)
+              if (ImplVariant & VecAll && ConvertNonAsciiWithSimd(pSrc, pDst)) ;
+              else if (advanceWithTable(pSrc, pSrcEnd, cdpt) != ERR) {
+                if constexpr (std::is_same_v<T, char16_t>) {
+                  GetCodeUnits(cdpt, pDst);
+                } else {
+                  *pDst++ = cdpt;
+                }
+              } else {
+                return -1;
+              }
+            } while (pSrc < pSrcEnd && pSrc[0] > 0x7f);
+            }
+        }
+        else if (*pSrc < 0x80)
+        {
+            ConvertAsciiWithSimd(pSrc, pDst);
+        }
+        else if (ImplVariant & VecAll && ConvertNonAsciiWithSimd(pSrc, pDst)) ;
+        else
+        {
+            if (advanceWithTable(pSrc, pSrcEnd, cdpt) != ERR)
+            {
+                if constexpr(std::is_same_v<T, char16_t>)
                 {
-                    if constexpr(std::is_same_v<T, char16_t>)
-                    {
-                        GetCodeUnits(cdpt, pDst);
-                    }
-                    else
-                    {
-                        *pDst++ = cdpt;
-                    }
+                    GetCodeUnits(cdpt, pDst);
                 }
                 else
                 {
-                    return -1;
+                    *pDst++ = cdpt;
                 }
-            } while (pSrc < pSrcEnd && pSrc[0] > 0x7f);
+            }
+            else
+            {
+                return -1;
+            }
         }
     }
 
@@ -606,6 +633,42 @@ UtfUtils::SimdConvert(char8_t const* pSrc, char8_t const* const pSrcEnd, T* pDst
     return pDst - pDstOrig;
 }
 
+template std::ptrdiff_t UtfUtils::SimdConvert<UtfUtils::LikeKewb, UtfUtils::BigTable>(
+    char8_t const* pSrc, char8_t const* const pSrcEnd, char32_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::SimdConvert<UtfUtils::LikeKewb, UtfUtils::SmallTable>(
+    char8_t const* pSrc, char8_t const* const pSrcEnd, char32_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::SimdConvert<UtfUtils::LikeKewb, UtfUtils::BigTable>(
+    char8_t const* pSrc, char8_t const* const pSrcEnd, char16_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::SimdConvert<UtfUtils::LikeKewb, UtfUtils::SmallTable>(
+    char8_t const* pSrc, char8_t const* const pSrcEnd, char16_t* pDst) noexcept;
+
+template std::ptrdiff_t UtfUtils::SimdConvert<UtfUtils::UseNonAsciiKnowledge, UtfUtils::BigTable>(
+    char8_t const* pSrc, char8_t const* const pSrcEnd, char32_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::SimdConvert<UtfUtils::UseNonAsciiKnowledge, UtfUtils::SmallTable>(
+    char8_t const* pSrc, char8_t const* const pSrcEnd, char32_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::SimdConvert<UtfUtils::UseNonAsciiKnowledge, UtfUtils::BigTable>(
+    char8_t const* pSrc, char8_t const* const pSrcEnd, char16_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::SimdConvert<UtfUtils::UseNonAsciiKnowledge, UtfUtils::SmallTable>(
+    char8_t const* pSrc, char8_t const* const pSrcEnd, char16_t* pDst) noexcept;
+
+template std::ptrdiff_t UtfUtils::SimdConvert<UtfUtils::LikeKewbButVecAll, UtfUtils::BigTable>(
+    char8_t const* pSrc, char8_t const* const pSrcEnd, char32_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::SimdConvert<UtfUtils::LikeKewbButVecAll, UtfUtils::SmallTable>(
+    char8_t const* pSrc, char8_t const* const pSrcEnd, char32_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::SimdConvert<UtfUtils::LikeKewbButVecAll, UtfUtils::BigTable>(
+    char8_t const* pSrc, char8_t const* const pSrcEnd, char16_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::SimdConvert<UtfUtils::LikeKewbButVecAll, UtfUtils::SmallTable>(
+    char8_t const* pSrc, char8_t const* const pSrcEnd, char16_t* pDst) noexcept;
+
+template std::ptrdiff_t UtfUtils::SimdConvert<UtfUtils::UseNonAsciiKnowledgeVecAll, UtfUtils::BigTable>(
+    char8_t const* pSrc, char8_t const* const pSrcEnd, char32_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::SimdConvert<UtfUtils::UseNonAsciiKnowledgeVecAll, UtfUtils::SmallTable>(
+    char8_t const* pSrc, char8_t const* const pSrcEnd, char32_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::SimdConvert<UtfUtils::UseNonAsciiKnowledgeVecAll, UtfUtils::BigTable>(
+    char8_t const* pSrc, char8_t const* const pSrcEnd, char16_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::SimdConvert<UtfUtils::UseNonAsciiKnowledgeVecAll, UtfUtils::SmallTable>(
+    char8_t const* pSrc, char8_t const* const pSrcEnd, char16_t* pDst) noexcept;
+
 //--------------------------------------------------------------------------------------------------
 /// \brief  Converts a sequence of UTF-8 code units to a sequence of UTF-16/32 code points.
 ///
@@ -632,7 +695,7 @@ template <typename T>
 KEWB_ALIGN_FN std::ptrdiff_t
 UtfUtils::SimdBigTableConvert(char8_t const* pSrc, char8_t const* const pSrcEnd, T* pDst) noexcept
 {
-    return SimdConvert(pSrc, pSrcEnd, pDst, AdvanceWithBigTable);
+    return SimdConvert<LikeKewb, BigTable>(pSrc, pSrcEnd, pDst);
 }
 template std::ptrdiff_t UtfUtils::SimdBigTableConvert(char8_t const*,
                                                       char8_t const* const,
@@ -989,7 +1052,7 @@ template <typename T>
 KEWB_ALIGN_FN std::ptrdiff_t
 UtfUtils::SimdSmallTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, T* pDst) noexcept
 {
-    return SimdConvert(pSrc, pSrcEnd, pDst, AdvanceWithSmallTable);
+    return SimdConvert<LikeKewb, SmallTable>(pSrc, pSrcEnd, pDst);
 }
 template std::ptrdiff_t UtfUtils::SimdSmallTableConvert(char8_t const*,
                                                         char8_t const* const,
@@ -1398,9 +1461,7 @@ UtfUtils::ConvertAsciiWithSimd(char8_t const*& pSrc, T*& pDst) noexcept
 {
   if (char8v::size() > 1 && pSrc[1] > 0x7f) {
     // quick exit if vectorization is overkill
-    if (pSrc[0] < 0x80) {
-      *pDst++ = *pSrc++;
-    }
+    *pDst++ = *pSrc++;
     return NextChar::NotAscii;
   }
   const char8v chunk(pSrc, stdx::element_aligned);
@@ -1415,6 +1476,92 @@ UtfUtils::ConvertAsciiWithSimd(char8_t const*& pSrc, T*& pDst) noexcept
     pDst += n_valid;
     return NextChar::NotAscii;
   }
+}
+
+template <class T>
+KEWB_FORCE_INLINE bool ConvertNonAsciiWithSimd(UtfUtils::char8_t const*& pSrc,
+                                               T*& pDst) noexcept
+{
+  const char8v chunk(pSrc, stdx::element_aligned);
+  if (*pSrc < 0b1100'0000)
+      return false;
+  if (pSrc[0] < 0b1110'0000)
+  {
+      constexpr char8v mask([](auto i) { return i % 2 == 0 ? 0b1110'0000 : 0b1100'0000; });
+      constexpr char8v expected_bits([](auto i) { return i % 2 == 0 ? 0b1100'0000 : 0b1000'0000; });
+      using char16v = deduced_simd<std::uint16_t, char8v::size() / 2>;
+      auto chunk16 = bit_cast<char16v>(chunk);
+      chunk16 = ((chunk16 & 0x3f00) >> 8) | ((chunk16 & 0x001f) << 6);
+      const auto invalid_2byte_seq = (chunk & mask) != expected_bits;
+      if (__builtin_expect(none_of(invalid_2byte_seq), false)) {
+          chunk16.copy_to(pDst, stdx::element_aligned);
+          pSrc += chunk16.size() * 2;
+          pDst += chunk16.size();
+      } else {
+          const int n_valid = find_first_set(invalid_2byte_seq) / 2;
+          if (__builtin_expect(n_valid == 0, false))
+          {
+              return false;
+          }
+          pSrc += n_valid * 2;
+          for (int i = 0; i < n_valid; ++i) {
+              *pDst++ = chunk16[i];
+          }
+      }
+  }
+  else if (pSrc[0] < 0b1111'0000)
+  {
+      constexpr char8v mask([](auto i) { return i % 3 == 0 ? 0b1111'0000 : 0b1100'0000; });
+      constexpr char8v expected_bits([](auto i) { return i % 3 == 0 ? 0b1110'0000 : 0b1000'0000; });
+      const auto invalid_3byte_seq = (chunk & mask) != expected_bits;
+      const int n_valid = none_of(invalid_3byte_seq)
+                              ? char8v::size() / 3
+                              : find_first_set(invalid_3byte_seq) / 3;
+      if (__builtin_expect(n_valid == 0, false))
+      {
+          return false;
+      }
+      pSrc += 3 * n_valid;
+      const auto chunk3f = chunk & 0x3f;
+      for (int i = 0; i < n_valid; ++i) {
+        *pDst++ = ((chunk3f[i * 3] << 12) & 0xffff) + (chunk3f[i * 3 + 1] << 6) +
+                  chunk3f[i * 3 + 2];
+      }
+  }
+  else if (pSrc[0] < 0b1111'1000)
+  {
+      constexpr char8v mask([](auto i) { return i % 4 == 0 ? 0b1111'1000 : 0b1100'0000; });
+      constexpr char8v expected_bits([](auto i) { return i % 4 == 0 ? 0b1111'0000 : 0b1000'0000; });
+      using char32v = deduced_simd<std::uint32_t, char8v::size() / 4>;
+      auto chunk32 = bit_cast<char32v>(chunk);
+      if (sizeof(T) == 4)
+      {
+          chunk32 = ((chunk32 & 0x3f000000) >> 24) + ((chunk32 & 0x003f0000) >> 10) +
+                    ((chunk32 & 0x00003f00) << 4) + ((chunk32 & 0x00000007) << 18);
+          chunk32.copy_to(pDst, stdx::element_aligned);
+      }
+      else
+      {
+          chunk32 = ((((chunk32 & 0x3f000000) >> 8) + ((chunk32 & 0x000f0000) << 6)) |
+                     (((chunk32 & 0x00300000) >> 20) +
+                      ((chunk32 & 0x00003f00) >> 6) + ((chunk32 & 0x00000007) << 8))) +
+                    0xdc00'd7c0;
+          using char16v = deduced_simd<std::uint16_t, char32v::size() * 2>;
+          bit_cast<char16v>(chunk32).copy_to(pDst, stdx::element_aligned);
+      }
+      const auto invalid_4byte_seq = (chunk & mask) != expected_bits;
+      if (__builtin_expect(none_of(invalid_4byte_seq), false)) {
+          pSrc += chunk32.size() * 4;
+          pDst += chunk32.size() * (4 / sizeof(T));
+      } else {
+          const int n_valid = find_first_set(invalid_4byte_seq) / 4;
+          pSrc += n_valid * 4;
+          pDst += n_valid * (4 / sizeof(T));
+      }
+  }
+  else
+      return false;
+  return true;
 }
 
 //--------------------------------------------------------------------------------------------------
