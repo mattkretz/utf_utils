@@ -537,6 +537,27 @@ TestAllConversions16(string const& fname, bool isFile, size_t repShift, bool tbl
         add("kewb-vir-simd-all-smart", [](auto a, auto b, auto c) {
           return Convert16_KewbApi(a, b, c, UtfUtils::SimdConvert<UtfUtils::UseNonAsciiKnowledgeVecAll, UtfUtils::BigTable>);
         });
+        add("vir1", [](auto a, auto b, auto c) {
+          return Convert16_KewbApi(a, b, c, UtfUtils::VirConvert<1>);
+        });
+        add("vir2", [](auto a, auto b, auto c) {
+          return Convert16_KewbApi(a, b, c, UtfUtils::VirConvert<2>);
+        });
+        add("vir3", [](auto a, auto b, auto c) {
+          return Convert16_KewbApi(a, b, c, UtfUtils::VirConvert<3>);
+        });
+        add("vir4", [](auto a, auto b, auto c) {
+          return Convert16_KewbApi(a, b, c, UtfUtils::VirConvert<4>);
+        });
+        add("vir2p", [](auto a, auto b, auto c) {
+          return Convert16_KewbApi(a, b, c, UtfUtils::VirConvert<2, true>);
+        });
+        add("vir3p", [](auto a, auto b, auto c) {
+          return Convert16_KewbApi(a, b, c, UtfUtils::VirConvert<3, true>);
+        });
+        add("vir4p", [](auto a, auto b, auto c) {
+          return Convert16_KewbApi(a, b, c, UtfUtils::VirConvert<4, true>);
+        });
     }
 
     return tuple<name_list, time_list>(algos, times);

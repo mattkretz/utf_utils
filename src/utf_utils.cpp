@@ -547,6 +547,320 @@ UtfUtils::SseBigTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char32
 }
 
 using char8v = stdx::native_simd<UtfUtils::char8_t>;
+template <typename T, int N>
+using deduced_simd = stdx::simd<T, stdx::simd_abi::deduce_t<T, N>>;
+
+template <typename T, typename U>
+std::enable_if_t<
+    sizeof(T) == sizeof(U) && std::is_trivially_copyable_v<U> && std::is_trivial_v<T>, T>
+bit_cast(const U& x)
+{
+  T r;
+  std::memcpy(static_cast<void*>(&r), static_cast<const void*>(&x), sizeof(T));
+  return r;
+}
+
+static inline int count_leading_zeros(std::uint32_t x) { return __builtin_clz(x); }
+template <int N> static inline int expect(int x) { return __builtin_expect(x, N); }
+
+struct invalid_utf8 {};
+
+template <int VecNBytes, bool ParallelShifts, typename T>
+std::ptrdiff_t UtfUtils::VirConvert(char8_t const* pSrc, char8_t const* const pSrcEnd,
+                                    T* pDst)
+{
+  constexpr bool vec1byte = 1 <= VecNBytes; // vectorize 1-Byte decoding
+  constexpr bool vec2byte = 2 <= VecNBytes; // vectorize 2-Byte decoding
+  constexpr bool vec3byte = 3 <= VecNBytes; // vectorize 3-Byte decoding
+  constexpr bool vec4byte = 4 <= VecNBytes; // vectorize 4-Byte decoding
+  T* pDstOrig = pDst;
+
+  auto&& scal1 = [&]() { *pDst++ = *pSrc++; };
+
+  auto&& scal2 = [&]() {
+    if (expect<false>((pSrc[1] & 0b1100'0000) != 0b1000'0000)) {
+      throw invalid_utf8();
+    }
+    const auto cdpt = ((pSrc[0] & 0x1f) << 6) | (pSrc[1] & 0x3f);
+    *pDst++ = cdpt;
+    pSrc += 2;
+    if (expect<false>(cdpt < 0x80)) {
+      throw invalid_utf8();
+    }
+  };
+
+  auto&& scal3 = [&]() {
+    if (expect<false>((pSrc[1] & 0b1100'0000) != 0b1000'0000 ||
+                      (pSrc[2] & 0b1100'0000) != 0b1000'0000)) {
+      throw invalid_utf8();
+    }
+    const auto cdpt =
+        ((pSrc[0] & 0x0f) << 12) | ((pSrc[1] & 0x3f) << 6) | (pSrc[2] & 0x3f);
+    *pDst++ = cdpt;
+    pSrc += 3;
+    if (expect<false>(cdpt < 0x800)) {
+      throw invalid_utf8();
+    }
+  };
+
+  auto&& scal4 = [&]() {
+    if (expect<false>((pSrc[1] & 0b1100'0000) != 0b1000'0000 ||
+                      (pSrc[2] & 0b1100'0000) != 0b1000'0000 ||
+                      (pSrc[3] & 0b1100'0000) != 0b1000'0000)) {
+      throw invalid_utf8();
+    }
+    if constexpr (std::is_same_v<T, char32_t>) {
+      const auto cdpt = ((pSrc[0] & 0x07) << 18) | ((pSrc[1] & 0x3f) << 12) |
+                        ((pSrc[2] & 0x3f) << 6) | (pSrc[3] & 0x3f);
+      *pDst++ = cdpt;
+      if (expect<false>(cdpt < 0x10000)) {
+        throw invalid_utf8();
+      }
+    } else {
+      static_assert(std::is_same_v<T, char16_t>);
+      const char16_t lo = ((pSrc[2] & 0x0f) << 6) | (pSrc[3] & 0x3f);
+      const char16_t hi =
+          ((pSrc[0] & 0x07) << 8) | ((pSrc[1] & 0x3f) << 2) | ((pSrc[2] & 0x3f) >> 4);
+      pDst[0] = hi + 0xd7c0;
+      pDst[1] = lo + 0xdc00;
+      pDst += 2;
+      if (expect<false>(hi < 0x40)) {
+        throw invalid_utf8();
+      }
+    }
+    pSrc += 4;
+  };
+
+  while (pSrcEnd - char8v::size() >
+         pSrc) {  // while there are enough input bytes for vectorization
+    const char8v chunk(pSrc, stdx::element_aligned);
+
+    auto&& vec1 = [&]() {
+      do {
+        const char8v chunk(pSrc, stdx::element_aligned);
+        chunk.copy_to(pDst, stdx::element_aligned);
+        if (none_of(chunk > 0x7f)) {
+          pSrc += chunk.size();
+          pDst += chunk.size();
+        } else {
+          const int n_valid = find_first_set(chunk > 0x7f);
+          pSrc += n_valid;
+          pDst += n_valid;
+          break;
+        }
+      } while (pSrcEnd - char8v::size() > pSrc);
+    };
+
+    auto&& vec2 = [&]() {
+      const auto invalid_2byte_seq =
+          chunk < char8v([](auto i) { return i % 2 == 0 ? 0b1100'0010 : 0b1000'0000; }) ||
+          chunk > char8v([](auto i) { return i % 2 == 0 ? 0b1101'1111 : 0b1011'1111; });
+      const int n_valid = none_of(invalid_2byte_seq)
+                              ? char8v::size() / 2
+                              : find_first_set(invalid_2byte_seq) / 2;
+      pSrc += n_valid * 2;
+      if (expect<false>(n_valid == 0)) {
+        throw invalid_utf8();
+      }
+      if constexpr (ParallelShifts) {
+        using char16v = deduced_simd<std::uint16_t, char8v::size() / 2>;
+        auto chunk16 = bit_cast<char16v>(chunk);
+        chunk16 = ((chunk16 & 0x3f00) >> 8) | ((chunk16 & 0x001f) << 6);
+        for (int i = 0; i < n_valid; ++i) {
+          *pDst++ = chunk16[i];
+        }
+      } else {
+        const auto lo6bits =
+            chunk & 0x3f;  // in principle {0x1f, 0x3f, 0x1f, 0x3f, ...}, but we already
+                           // checked that bit 0x20 is 0 for even indexes
+        for (int i = 0; i < n_valid; ++i) {
+          *pDst++ = (lo6bits[2 * i] << 6) | lo6bits[2 * i + 1];
+        }
+      }
+    };
+
+    auto&& vec3 = [&]() {
+      constexpr char8v mask(
+          [](auto i) { return i % 3 == 0 ? 0b1111'0000 : 0b1100'0000; });
+      constexpr char8v expected_bits(
+          [](auto i) { return i % 3 == 0 ? 0b1110'0000 : 0b1000'0000; });
+      const auto invalid_3byte_seq = (chunk & mask) != expected_bits;
+      const int n_valid = none_of(invalid_3byte_seq)
+                              ? char8v::size() / 3
+                              : find_first_set(invalid_3byte_seq) / 3;
+      if (expect<false>(n_valid == 0)) {
+        throw invalid_utf8();
+      }
+      pSrc += 3 * n_valid;
+      constexpr char8v code_mask(
+          [](auto i) { return i % 3 == 0 ? 0b0000'1111 : 0b0011'1111; });
+      const auto chunk3f = chunk & code_mask;
+      for (int i = 0; i < n_valid; ++i) {
+        const auto cdpt =
+            (chunk3f[i * 3] << 12) | (chunk3f[i * 3 + 1] << 6) | chunk3f[i * 3 + 2];
+        *pDst++ = cdpt;
+        if (expect<false>(cdpt < 0x800)) {
+          throw invalid_utf8();
+        }
+      }
+    };
+
+    auto&& vec4 = [&]() {
+      constexpr char8v mask(
+          [](auto i) { return i % 4 == 0 ? 0b1111'1000 : 0b1100'0000; });
+      constexpr char8v expected_bits(
+          [](auto i) { return i % 4 == 0 ? 0b1111'0000 : 0b1000'0000; });
+      const auto invalid_4byte_seq = (chunk & mask) != expected_bits;
+      const int n_valid = none_of(invalid_4byte_seq)
+                              ? char8v::size() / 4
+                              : find_first_set(invalid_4byte_seq) / 4;
+      if (expect<false>(n_valid == 0)) {
+        throw invalid_utf8();
+      }
+      constexpr char8v code_mask(
+          [](auto i) { return i % 4 == 0 ? 0b0000'0111 : 0b0011'1111; });
+      const char8v codebits = chunk & code_mask;
+      pSrc += n_valid * 4;
+      if (sizeof(T) == 4) {
+        for (int i = 0; i < n_valid; ++i) {
+          const auto cdpt = (codebits[4 * i + 0] << 18) | (codebits[4 * i + 1] << 12) |
+                            (codebits[4 * i + 2] << 6) | codebits[4 * i + 3];
+          *pDst++ = cdpt;
+          if (expect<false>(cdpt < 0x10000)) {
+            throw invalid_utf8();
+          }
+        }
+      } else {
+        for (int i = 0; i < n_valid; ++i) {
+          /*
+        const auto cdpt = (codebits[4 * i + 0] << 18) | (codebits[4 * i + 1] << 12) |
+                          (codebits[4 * i + 2] << 6) | codebits[4 * i + 3];
+        *pDst++ = 0xd7c0 + (cdpt >> 10);
+        *pDst++ = 0xdc00 + (cdpt & 0x3ff);
+        if (expect<false>(cdpt < 0x10000)) {
+          throw invalid_utf8();
+        }
+        */
+          pDst[0] = ((codebits[4 * i + 0] << 8) | (codebits[4 * i + 1] << 2) |
+                     (codebits[4 * i + 2] >> 4)) +
+                    0xd7c0;
+          const auto hi = ((codebits[4 * i + 2] & 0x0f) << 6) | codebits[4 * i + 3];
+          pDst[1] = hi + 0xdc00;
+          pDst += 2;
+          if (expect<false>(hi < 0x40)) {
+            throw invalid_utf8();
+          }
+        }
+      }
+    };
+
+    switch (expect<0>(count_leading_zeros(~(pSrc[0] << 24)))) {
+    case 0:
+      if (!vec1byte || expect<false>(pSrc[1] > 0x7f)) {
+        scal1();
+      } else {
+        vec1();
+      }
+      break;
+    case 1:
+      throw invalid_utf8();
+    case 2:
+      if (vec2byte && expect<true>((~pSrc[2] & 0b1100'0000) == 0)) {
+        vec2();
+      } else {
+        scal2();
+      }
+      break;
+    case 3:
+      if (vec3byte && expect<true>((~pSrc[3] & 0b1110'0000) == 0)) {
+        vec3();
+      } else {
+        scal3();
+      }
+      break;
+    case 4:
+      if (vec4byte && expect<false>((~pSrc[4] & 0b1111'0000) == 0)) {
+        vec4();
+      } else {
+        scal4();
+      }
+      break;
+    default:
+      throw invalid_utf8();
+    }
+  }
+  while (pSrcEnd > pSrc) {
+    switch (expect<0>(count_leading_zeros(~(pSrc[0] << 24)))) {
+    case 0:
+      scal1();
+      break;
+    case 1:
+      throw invalid_utf8();
+    case 2:
+      scal2();
+      break;
+    case 3:
+      scal3();
+      break;
+    case 4:
+      scal4();
+      break;
+    default:
+      throw invalid_utf8();
+    }
+  }
+  return pDst - pDstOrig;
+}
+
+template std::ptrdiff_t UtfUtils::VirConvert<0, false, char16_t>(char8_t const* pSrc,
+                                                                 char8_t const* const pSrcEnd,
+                                                                 char16_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::VirConvert<1, false, char16_t>(char8_t const* pSrc,
+                                                                 char8_t const* const pSrcEnd,
+                                                                 char16_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::VirConvert<2, false, char16_t>(char8_t const* pSrc,
+                                                                 char8_t const* const pSrcEnd,
+                                                                 char16_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::VirConvert<2,  true, char16_t>(char8_t const* pSrc,
+                                                                 char8_t const* const pSrcEnd,
+                                                                 char16_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::VirConvert<3, false, char16_t>(char8_t const* pSrc,
+                                                                 char8_t const* const pSrcEnd,
+                                                                 char16_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::VirConvert<3,  true, char16_t>(char8_t const* pSrc,
+                                                                 char8_t const* const pSrcEnd,
+                                                                 char16_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::VirConvert<4, false, char16_t>(char8_t const* pSrc,
+                                                                 char8_t const* const pSrcEnd,
+                                                                 char16_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::VirConvert<4,  true, char16_t>(char8_t const* pSrc,
+                                                                 char8_t const* const pSrcEnd,
+                                                                 char16_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::VirConvert<0, false, char32_t>(char8_t const* pSrc,
+                                                                 char8_t const* const pSrcEnd,
+                                                                 char32_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::VirConvert<1, false, char32_t>(char8_t const* pSrc,
+                                                                 char8_t const* const pSrcEnd,
+                                                                 char32_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::VirConvert<2, false, char32_t>(char8_t const* pSrc,
+                                                                 char8_t const* const pSrcEnd,
+                                                                 char32_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::VirConvert<2,  true, char32_t>(char8_t const* pSrc,
+                                                                 char8_t const* const pSrcEnd,
+                                                                 char32_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::VirConvert<3, false, char32_t>(char8_t const* pSrc,
+                                                                 char8_t const* const pSrcEnd,
+                                                                 char32_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::VirConvert<3,  true, char32_t>(char8_t const* pSrc,
+                                                                 char8_t const* const pSrcEnd,
+                                                                 char32_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::VirConvert<4, false, char32_t>(char8_t const* pSrc,
+                                                                 char8_t const* const pSrcEnd,
+                                                                 char32_t* pDst) noexcept;
+template std::ptrdiff_t UtfUtils::VirConvert<4,  true, char32_t>(char8_t const* pSrc,
+                                                                 char8_t const* const pSrcEnd,
+                                                                 char32_t* pDst) noexcept;
+
 
 template <class T>
 KEWB_FORCE_INLINE bool ConvertNonAsciiWithSimd(UtfUtils::char8_t const*& pSrc,

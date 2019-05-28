@@ -127,6 +127,9 @@ class UtfUtils
     static ptrdiff_t SimdConvert(char8_t const* pSrc, char8_t const* const pSrcEnd,
                                  T* pDst) noexcept;
 
+    template <int VecNBytes = 3, bool ParallelShifts = false, typename T>
+    static ptrdiff_t VirConvert(char8_t const* pSrc, char8_t const* pSrcEnd, T* pDst);
+
     //- Conversion to UTF-32/UTF-16 using pre-computed first code unit lookup table.
     //
     static  ptrdiff_t   BasicBigTableConvert(char8_t const* pSrc, char8_t const* pSrcEnd, char32_t* pDst) noexcept;
